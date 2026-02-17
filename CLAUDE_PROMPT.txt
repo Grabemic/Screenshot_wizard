@@ -1,0 +1,35 @@
+I just cloned Screenshot_wizard from GitHub. This is a Python CLI tool that:
+- Monitors a folder for PNG screenshots
+- Extracts text using OpenAI GPT-4 Vision
+- Generates PDFs with categories and extracted text
+- Archives processed PNGs
+
+The code was written but NOT tested yet. Please:
+1. Help me set up the environment (venv, dependencies, .env file)
+2. Test the application and fix any issues
+3. Verify all modules work correctly
+
+Project structure:
+- src/main.py - CLI entry point (click framework)
+- src/watcher.py - Folder monitoring (watchdog)
+- src/analyzer.py - OpenAI GPT-4 Vision integration
+- src/pdf_generator.py - PDF creation (reportlab)
+- src/file_manager.py - File operations
+- src/config.py - Configuration management
+- config/settings.yaml - Default settings
+- tests/ - Unit tests for all modules
+
+CLI commands:
+- python -m src.main init     (create folders)
+- python -m src.main watch    (monitor folder for new PNGs)
+- python -m src.main process <file.png>   (process single file)
+- python -m src.main batch    (process all pending files)
+- python -m src.main config   (show configuration)
+
+Setup steps needed:
+1. python -m venv venv
+2. venv\Scripts\activate  (Windows)
+3. pip install -r requirements.txt
+4. copy .env.example .env
+5. Edit .env and add OPENAI_API_KEY
+6. python -m src.main init
