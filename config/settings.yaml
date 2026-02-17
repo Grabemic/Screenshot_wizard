@@ -1,0 +1,25 @@
+# Screenshot Wizard Configuration
+# These are default settings that can be overridden via CLI arguments
+
+# Folder paths (relative to project root or absolute paths)
+folders:
+  input: "./input"
+  output: "./output"
+  archive: "./archive"
+
+# Processing settings
+processing:
+  polling_interval: 5  # Seconds between folder checks
+  max_categories: 2    # Maximum categories per document
+
+# PDF settings
+pdf:
+  page_size: "A4"
+  font_family: "Helvetica"
+  font_size: 11
+  margin: 72  # 1 inch in points
+
+# OpenAI settings
+openai:
+  model: "gpt-4o"  # Vision-capable model
+  max_tokens: 4096

@@ -1,0 +1,6 @@
+openai>=1.0.0          # OpenAI API client
+watchdog>=3.0.0        # Folder monitoring
+reportlab>=4.0.0       # PDF generation
+pyyaml>=6.0            # Configuration files
+python-dotenv>=1.0.0   # Environment variables
+click>=8.0.0           # CLI framework
