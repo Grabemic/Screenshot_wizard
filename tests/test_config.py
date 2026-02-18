@@ -32,7 +32,8 @@ class TestConfig:
 
     def test_api_key_validation_fails_without_key(self):
         """Test that missing API key raises ValueError."""
-        with patch.dict(os.environ, {}, clear=True):
+        with patch.dict(os.environ, {}, clear=True), \
+             patch("src.config.load_dotenv"):
             # Remove OPENAI_API_KEY from environment
             os.environ.pop("OPENAI_API_KEY", None)
 
