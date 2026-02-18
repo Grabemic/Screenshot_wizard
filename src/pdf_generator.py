@@ -179,7 +179,16 @@ class PDFGenerator:
 
             try:
                 img = RLImage(str(result.source_image_path), width=width)
-                # Maintain aspect ratio
+                # Constrain height to fit within page
+                max_height = self.page_size[1] - 2 * self.margin - 2 * inch
+                if img.imageHeight and img.imageWidth:
+                    scaled_height = width * img.imageHeight / img.imageWidth
+                    if scaled_height > max_height:
+                        img = RLImage(
+                            str(result.source_image_path),
+                            width=max_height * img.imageWidth / img.imageHeight,
+                            height=max_height,
+                        )
                 img.hAlign = "CENTER"
                 elements.append(img)
                 elements.append(Spacer(1, 0.2 * inch))
