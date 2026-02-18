@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
+from PIL import Image as PILImage
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -178,17 +179,24 @@ class PDFGenerator:
                 width = self.page_size[0] - 2 * self.margin
 
             try:
-                img = RLImage(str(result.source_image_path), width=width)
-                # Constrain height to fit within page
+                # Use Pillow to get actual image dimensions
+                with PILImage.open(result.source_image_path) as pil_img:
+                    img_w, img_h = pil_img.size
+
                 max_height = self.page_size[1] - 2 * self.margin - 2 * inch
-                if img.imageHeight and img.imageWidth:
-                    scaled_height = width * img.imageHeight / img.imageWidth
-                    if scaled_height > max_height:
-                        img = RLImage(
-                            str(result.source_image_path),
-                            width=max_height * img.imageWidth / img.imageHeight,
-                            height=max_height,
-                        )
+                aspect = img_h / img_w
+                scaled_height = width * aspect
+
+                if scaled_height > max_height:
+                    # Scale down to fit page height
+                    height = max_height
+                    width = max_height / aspect
+                else:
+                    height = scaled_height
+
+                img = RLImage(
+                    str(result.source_image_path), width=width, height=height
+                )
                 img.hAlign = "CENTER"
                 elements.append(img)
                 elements.append(Spacer(1, 0.2 * inch))
