@@ -86,7 +86,10 @@ class FileManager:
         Returns:
             List of PNG file paths
         """
-        png_files = list(input_folder.glob("*.png")) + list(input_folder.glob("*.PNG"))
+        png_files = [
+            f for f in input_folder.iterdir()
+            if f.is_file() and f.suffix.lower() == ".png"
+        ]
         return sorted(png_files, key=lambda p: p.stat().st_mtime)
 
     def cleanup_empty_input(self, input_folder: Path) -> None:

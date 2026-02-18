@@ -127,9 +127,10 @@ class FolderWatcher:
         Returns:
             Number of files processed
         """
-        png_files = list(self.input_folder.glob("*.png")) + list(
-            self.input_folder.glob("*.PNG")
-        )
+        png_files = [
+            f for f in self.input_folder.iterdir()
+            if f.is_file() and f.suffix.lower() == ".png"
+        ]
 
         if not png_files:
             logger.info("No existing PNG files found in input folder.")

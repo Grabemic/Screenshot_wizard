@@ -55,7 +55,7 @@ class PDFGenerator:
 
         self.styles.add(
             ParagraphStyle(
-                "BodyText",
+                "CustomBody",
                 parent=self.styles["Normal"],
                 fontName=self.font_family,
                 fontSize=self.font_size,
@@ -168,7 +168,7 @@ class PDFGenerator:
         # Convert newlines to HTML breaks
         text_content = text_content.replace("\n", "<br/>")
 
-        body_para = Paragraph(text_content, self.styles["BodyText"])
+        body_para = Paragraph(text_content, self.styles["CustomBody"])
         elements.append(body_para)
 
         # Spacer before footer

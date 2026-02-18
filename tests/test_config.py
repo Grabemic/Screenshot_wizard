@@ -66,10 +66,12 @@ class TestConfig:
             from src.config import Config
 
             config = Config()
-            abs_path = "/some/absolute/path"
-            resolved = config._resolve_path(abs_path)
+            abs_path = Path(config.project_root / "some" / "absolute" / "path")
+            abs_path_str = str(abs_path)
+            resolved = config._resolve_path(abs_path_str)
 
-            assert str(resolved) == abs_path
+            assert resolved.is_absolute()
+            assert str(resolved) == abs_path_str
 
     def test_custom_yaml_loading(self):
         """Test loading custom YAML configuration."""
