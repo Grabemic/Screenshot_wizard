@@ -3,8 +3,9 @@
 import base64
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from openai import OpenAI
 
@@ -33,6 +34,43 @@ Important:
 - Categories should be relevant and specific
 """
 
+AUTO_DETECT_PROMPT = """
+Analyze this image and determine if it is primarily a TEXT document or a GRAPHIC/picture.
+
+- TEXT: screenshots of documents, emails, code, chat messages, web pages with text, etc.
+- GRAPHIC: photos, diagrams, charts, illustrations, UI mockups, maps, etc.
+
+If TEXT: extract all readable text exactly as it appears.
+If GRAPHIC: provide a detailed written description of the visual content.
+
+In both cases, suggest up to 2 categories.
+
+Respond in this exact JSON format:
+{
+  "content_type": "text" or "graphic",
+  "text": "The extracted text (if text document) or empty string (if graphic)",
+  "description": "Detailed description (if graphic) or empty string (if text)",
+  "categories": ["Category1", "Category2"]
+}
+"""
+
+GRAPHIC_ANALYSIS_PROMPT = """
+Provide a detailed written description of this image. Describe:
+- What the image shows (subject matter, scene, objects)
+- Layout and composition
+- Colors and visual style
+- Any text visible in the image
+- Purpose or context if apparent
+
+Also suggest up to 2 categories.
+
+Respond in this exact JSON format:
+{
+  "description": "Detailed description of the image...",
+  "categories": ["Category1", "Category2"]
+}
+"""
+
 
 @dataclass
 class AnalysisResult:
@@ -41,6 +79,17 @@ class AnalysisResult:
     text: str
     categories: list[str]
     source_file: str
+    content_type: Literal["text", "graphic"] = "text"
+    description: str = ""
+    source_image_path: Path | None = None
+
+
+# Map file extensions to MIME types for the API
+_MIME_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+}
 
 
 class ScreenshotAnalyzer:
@@ -74,22 +123,10 @@ class ScreenshotAnalyzer:
             Tuple of (extracted_text, categories)
         """
         try:
-            # Try to extract JSON from the response
-            # Sometimes the model wraps JSON in markdown code blocks
-            if "```json" in content:
-                start = content.index("```json") + 7
-                end = content.index("```", start)
-                content = content[start:end].strip()
-            elif "```" in content:
-                start = content.index("```") + 3
-                end = content.index("```", start)
-                content = content[start:end].strip()
-
-            data = json.loads(content)
+            data = self._extract_json(content)
             text = data.get("text", "[No text detected]")
             categories = data.get("categories", ["Uncategorized"])
 
-            # Limit categories
             if len(categories) > max_categories:
                 categories = categories[:max_categories]
 
@@ -97,25 +134,104 @@ class ScreenshotAnalyzer:
 
         except (json.JSONDecodeError, ValueError) as e:
             logger.warning(f"Failed to parse JSON response: {e}")
-            # Return the raw content as text if parsing fails
             return content, ["Uncategorized"]
 
-    def analyze(self, image_path: Path, max_categories: int = 2) -> AnalysisResult:
+    def _extract_json(self, content: str) -> dict:
+        """Extract JSON from raw API response content, handling markdown wrapping."""
+        if "```json" in content:
+            start = content.index("```json") + 7
+            end = content.index("```", start)
+            content = content[start:end].strip()
+        elif "```" in content:
+            start = content.index("```") + 3
+            end = content.index("```", start)
+            content = content[start:end].strip()
+
+        return json.loads(content)
+
+    def _parse_auto_response(
+        self, content: str, max_categories: int
+    ) -> tuple[str, str, str, list[str]]:
+        """Parse auto-detect JSON response.
+
+        Returns:
+            Tuple of (content_type, text, description, categories)
+        """
+        try:
+            data = self._extract_json(content)
+            content_type = data.get("content_type", "text")
+            text = data.get("text", "")
+            description = data.get("description", "")
+            categories = data.get("categories", ["Uncategorized"])
+
+            if len(categories) > max_categories:
+                categories = categories[:max_categories]
+
+            if not text and content_type == "text":
+                text = "[No text detected]"
+
+            return content_type, text, description, categories
+
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"Failed to parse auto-detect response: {e}")
+            return "text", content, "", ["Uncategorized"]
+
+    def _parse_graphic_response(
+        self, content: str, max_categories: int
+    ) -> tuple[str, list[str]]:
+        """Parse graphic analysis JSON response.
+
+        Returns:
+            Tuple of (description, categories)
+        """
+        try:
+            data = self._extract_json(content)
+            description = data.get("description", "")
+            categories = data.get("categories", ["Uncategorized"])
+
+            if len(categories) > max_categories:
+                categories = categories[:max_categories]
+
+            return description, categories
+
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"Failed to parse graphic response: {e}")
+            return content, ["Uncategorized"]
+
+    def analyze(
+        self,
+        image_path: Path,
+        max_categories: int = 2,
+        content_type_override: Literal["text", "graphic"] | None = None,
+        image_mime_type: str | None = None,
+    ) -> AnalysisResult:
         """Analyze a screenshot image.
 
         Args:
-            image_path: Path to the PNG image
+            image_path: Path to the image file
             max_categories: Maximum number of categories to extract
+            content_type_override: Force "text" or "graphic" mode, or None for auto-detect
+            image_mime_type: MIME type override (defaults based on file extension)
 
         Returns:
-            AnalysisResult with extracted text and categories
+            AnalysisResult with extracted text/description and categories
         """
         logger.info(f"Analyzing image: {image_path.name}")
 
-        # Encode image to base64
+        # Determine MIME type
+        if image_mime_type is None:
+            image_mime_type = _MIME_TYPES.get(image_path.suffix.lower(), "image/png")
+
         base64_image = self._encode_image(image_path)
 
-        # Send to OpenAI API
+        # Choose prompt based on content type
+        if content_type_override == "graphic":
+            prompt = GRAPHIC_ANALYSIS_PROMPT
+        elif content_type_override == "text":
+            prompt = ANALYSIS_PROMPT
+        else:
+            prompt = AUTO_DETECT_PROMPT
+
         response = self.client.chat.completions.create(
             model=self.model,
             max_tokens=self.max_tokens,
@@ -123,11 +239,11 @@ class ScreenshotAnalyzer:
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": ANALYSIS_PROMPT},
+                        {"type": "text", "text": prompt},
                         {
                             "type": "image_url",
                             "image_url": {
-                                "url": f"data:image/png;base64,{base64_image}",
+                                "url": f"data:{image_mime_type};base64,{base64_image}",
                                 "detail": "high",
                             },
                         },
@@ -136,14 +252,45 @@ class ScreenshotAnalyzer:
             ],
         )
 
-        # Extract content from response
-        content = response.choices[0].message.content or ""
-        text, categories = self._parse_response(content, max_categories)
+        raw_content = response.choices[0].message.content or ""
 
-        logger.info(f"Analysis complete. Categories: {categories}")
+        if content_type_override == "graphic":
+            description, categories = self._parse_graphic_response(
+                raw_content, max_categories
+            )
+            logger.info(f"Graphic analysis complete. Categories: {categories}")
+            return AnalysisResult(
+                text="",
+                categories=categories,
+                source_file=image_path.name,
+                content_type="graphic",
+                description=description,
+                source_image_path=image_path,
+            )
 
-        return AnalysisResult(
-            text=text,
-            categories=categories,
-            source_file=image_path.name,
-        )
+        elif content_type_override == "text":
+            text, categories = self._parse_response(raw_content, max_categories)
+            logger.info(f"Text analysis complete. Categories: {categories}")
+            return AnalysisResult(
+                text=text,
+                categories=categories,
+                source_file=image_path.name,
+                content_type="text",
+            )
+
+        else:
+            # Auto-detect
+            content_type, text, description, categories = self._parse_auto_response(
+                raw_content, max_categories
+            )
+            logger.info(
+                f"Auto-detect: {content_type}. Categories: {categories}"
+            )
+            return AnalysisResult(
+                text=text,
+                categories=categories,
+                source_file=image_path.name,
+                content_type=content_type,
+                description=description,
+                source_image_path=image_path if content_type == "graphic" else None,
+            )

@@ -3,13 +3,20 @@
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import (
+    Image as RLImage,
+    Paragraph,
+    SimpleDocTemplate,
+    Spacer,
+    Table,
+    TableStyle,
+)
 
 from .analyzer import AnalysisResult
 
@@ -18,6 +25,12 @@ logger = logging.getLogger(__name__)
 PAGE_SIZES = {
     "A4": A4,
     "letter": letter,
+}
+
+THUMBNAIL_WIDTHS = {
+    "small": 1.5 * inch,
+    "medium": 3.0 * inch,
+    "full": None,  # Will be calculated based on page width
 }
 
 
@@ -75,6 +88,18 @@ class PDFGenerator:
             )
         )
 
+        self.styles.add(
+            ParagraphStyle(
+                "DescriptionLabel",
+                parent=self.styles["Normal"],
+                fontName=f"{self.font_family}-Bold",
+                fontSize=12,
+                textColor=colors.HexColor("#2c3e50"),
+                spaceAfter=6,
+                spaceBefore=12,
+            )
+        )
+
     def _escape_text(self, text: str) -> str:
         """Escape special characters for ReportLab XML."""
         text = text.replace("&", "&amp;")
@@ -113,11 +138,81 @@ class PDFGenerator:
         )
         return Paragraph(footer_text, self.styles["Footer"])
 
+    def _create_separator(self) -> Table:
+        """Create a horizontal line separator."""
+        line_table = Table([[""]], colWidths=[self.page_size[0] - 2 * self.margin])
+        line_table.setStyle(
+            TableStyle(
+                [
+                    ("LINEABOVE", (0, 0), (-1, 0), 1, colors.HexColor("#bdc3c7")),
+                ]
+            )
+        )
+        return line_table
+
+    def _build_text_section(self, result: AnalysisResult) -> list:
+        """Build elements for text content."""
+        elements = []
+
+        text_content = self._escape_text(result.text)
+        text_content = text_content.replace("\n", "<br/>")
+
+        body_para = Paragraph(text_content, self.styles["CustomBody"])
+        elements.append(body_para)
+
+        return elements
+
+    def _build_graphic_section(
+        self,
+        result: AnalysisResult,
+        thumbnail_size: Literal["small", "medium", "full"] = "medium",
+    ) -> list:
+        """Build elements for graphic content with thumbnail and description."""
+        elements = []
+
+        # Embed thumbnail if source image is available
+        if result.source_image_path and result.source_image_path.exists():
+            width = THUMBNAIL_WIDTHS.get(thumbnail_size)
+            if width is None:
+                # "full" — use available page width
+                width = self.page_size[0] - 2 * self.margin
+
+            try:
+                img = RLImage(str(result.source_image_path), width=width)
+                # Maintain aspect ratio
+                img.hAlign = "CENTER"
+                elements.append(img)
+                elements.append(Spacer(1, 0.2 * inch))
+            except Exception as e:
+                logger.warning(f"Failed to embed thumbnail: {e}")
+
+        # Description
+        if result.description:
+            elements.append(
+                Paragraph("Description:", self.styles["DescriptionLabel"])
+            )
+            desc_text = self._escape_text(result.description)
+            desc_text = desc_text.replace("\n", "<br/>")
+            elements.append(Paragraph(desc_text, self.styles["CustomBody"]))
+
+        # Also include any extracted text
+        if result.text and result.text != "[No text detected]":
+            elements.append(Spacer(1, 0.2 * inch))
+            elements.append(
+                Paragraph("Extracted Text:", self.styles["DescriptionLabel"])
+            )
+            text_content = self._escape_text(result.text)
+            text_content = text_content.replace("\n", "<br/>")
+            elements.append(Paragraph(text_content, self.styles["CustomBody"]))
+
+        return elements
+
     def generate(
         self,
         result: AnalysisResult,
         output_path: Path,
         timestamp: datetime | None = None,
+        thumbnail_size: Literal["small", "medium", "full"] = "medium",
     ) -> Path:
         """Generate a PDF from analysis result.
 
@@ -125,6 +220,7 @@ class PDFGenerator:
             result: Analysis result with text and categories
             output_path: Path for the output PDF file
             timestamp: Processing timestamp (defaults to now)
+            thumbnail_size: Size for embedded thumbnails (graphic content)
 
         Returns:
             Path to the generated PDF file
@@ -151,31 +247,21 @@ class PDFGenerator:
         elements.append(self._create_category_header(result.categories))
         elements.append(Spacer(1, 0.3 * inch))
 
-        # Horizontal line
-        line_table = Table([[""]], colWidths=[self.page_size[0] - 2 * self.margin])
-        line_table.setStyle(
-            TableStyle(
-                [
-                    ("LINEABOVE", (0, 0), (-1, 0), 1, colors.HexColor("#bdc3c7")),
-                ]
-            )
-        )
-        elements.append(line_table)
+        # Separator
+        elements.append(self._create_separator())
         elements.append(Spacer(1, 0.2 * inch))
 
-        # Body text - handle line breaks and escape special chars
-        text_content = self._escape_text(result.text)
-        # Convert newlines to HTML breaks
-        text_content = text_content.replace("\n", "<br/>")
-
-        body_para = Paragraph(text_content, self.styles["CustomBody"])
-        elements.append(body_para)
+        # Content section based on type
+        if result.content_type == "graphic":
+            elements.extend(self._build_graphic_section(result, thumbnail_size))
+        else:
+            elements.extend(self._build_text_section(result))
 
         # Spacer before footer
         elements.append(Spacer(1, 0.5 * inch))
 
         # Footer line
-        elements.append(line_table)
+        elements.append(self._create_separator())
         elements.append(Spacer(1, 0.1 * inch))
 
         # Footer

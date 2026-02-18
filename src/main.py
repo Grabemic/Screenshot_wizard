@@ -2,14 +2,18 @@
 
 import logging
 import sys
+import tempfile
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
 import click
 
 from .analyzer import ScreenshotAnalyzer
-from .config import Config
+from .config import SUPPORTED_EXTENSIONS, Config
 from .file_manager import FileManager
+from .pdf_converter import PDFPageConverter
 from .pdf_generator import PDFGenerator
 from .watcher import FolderWatcher
 
@@ -20,6 +24,15 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ProcessingOptions:
+    """Options for file processing."""
+
+    content_type_override: Literal["text", "graphic"] | None = None
+    thumbnail_size: Literal["small", "medium", "full"] = "medium"
+    pdf_mode: Literal["per_page", "whole_document"] = "per_page"
 
 
 class ScreenshotWizard:
@@ -44,42 +57,121 @@ class ScreenshotWizard:
             archive_folder=config.archive_folder,
             output_folder=config.output_folder,
         )
+        self.pdf_converter = PDFPageConverter()
 
-    def process_file(self, file_path: Path) -> bool:
-        """Process a single PNG file.
+    def process_file(self, file_path: Path, options: ProcessingOptions | None = None) -> bool:
+        """Process a single file.
 
         Args:
-            file_path: Path to the PNG file
+            file_path: Path to the file
+            options: Processing options (None uses defaults)
 
         Returns:
             True if processing was successful
         """
+        if options is None:
+            options = ProcessingOptions()
+
         try:
             logger.info(f"Processing: {file_path.name}")
 
-            # Analyze the screenshot
-            result = self.analyzer.analyze(
-                file_path,
-                max_categories=self.config.max_categories,
-            )
-
-            # Generate PDF
-            pdf_path = self.file_manager.get_pdf_output_path(file_path.name)
-            self.pdf_generator.generate(
-                result,
-                pdf_path,
-                timestamp=datetime.now(),
-            )
-
-            # Archive the original PNG
-            self.file_manager.archive_file(file_path)
-
-            logger.info(f"Successfully processed: {file_path.name} -> {pdf_path.name}")
-            return True
+            if file_path.suffix.lower() == ".pdf":
+                return self._process_pdf(file_path, options)
+            else:
+                return self._process_image(file_path, options)
 
         except Exception as e:
             logger.error(f"Failed to process {file_path.name}: {e}")
             return False
+
+    def _process_image(self, file_path: Path, options: ProcessingOptions) -> bool:
+        """Process an image file (PNG, JPG, JPEG).
+
+        Args:
+            file_path: Path to the image
+            options: Processing options
+
+        Returns:
+            True if successful
+        """
+        result = self.analyzer.analyze(
+            file_path,
+            max_categories=self.config.max_categories,
+            content_type_override=options.content_type_override,
+        )
+
+        pdf_path = self.file_manager.get_pdf_output_path(file_path.name)
+        self.pdf_generator.generate(
+            result,
+            pdf_path,
+            timestamp=datetime.now(),
+            thumbnail_size=options.thumbnail_size,
+        )
+
+        self.file_manager.archive_file(file_path)
+
+        logger.info(f"Successfully processed: {file_path.name} -> {pdf_path.name}")
+        return True
+
+    def _process_pdf(self, file_path: Path, options: ProcessingOptions) -> bool:
+        """Process a PDF file by rendering pages to images first.
+
+        Args:
+            file_path: Path to the PDF
+            options: Processing options
+
+        Returns:
+            True if successful
+        """
+        if options.pdf_mode == "whole_document":
+            # Render first page only for a single analysis
+            with tempfile.TemporaryDirectory() as tmpdir:
+                rendered = Path(tmpdir) / f"{file_path.stem}_page_1.png"
+                self.pdf_converter.render_page(file_path, 0, rendered)
+
+                result = self.analyzer.analyze(
+                    rendered,
+                    max_categories=self.config.max_categories,
+                    content_type_override=options.content_type_override,
+                )
+                result.source_file = file_path.name
+
+                pdf_path = self.file_manager.get_pdf_output_path(file_path.name)
+                self.pdf_generator.generate(
+                    result,
+                    pdf_path,
+                    timestamp=datetime.now(),
+                    thumbnail_size=options.thumbnail_size,
+                )
+
+        else:
+            # Per-page mode: render and process each page individually
+            page_count = self.pdf_converter.get_page_count(file_path)
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                for i in range(page_count):
+                    rendered = Path(tmpdir) / f"{file_path.stem}_page_{i + 1}.png"
+                    self.pdf_converter.render_page(file_path, i, rendered)
+
+                    result = self.analyzer.analyze(
+                        rendered,
+                        max_categories=self.config.max_categories,
+                        content_type_override=options.content_type_override,
+                    )
+                    result.source_file = f"{file_path.name} (page {i + 1})"
+
+                    page_name = f"{file_path.stem}_page_{i + 1}.pdf"
+                    pdf_path = self.file_manager.get_pdf_output_path(page_name)
+                    self.pdf_generator.generate(
+                        result,
+                        pdf_path,
+                        timestamp=datetime.now(),
+                        thumbnail_size=options.thumbnail_size,
+                    )
+
+        self.file_manager.archive_file(file_path)
+        logger.info(f"Successfully processed PDF: {file_path.name}")
+        return True
 
 
 def load_config() -> Config:
@@ -109,10 +201,10 @@ def cli():
     help="Process existing files in input folder before watching",
 )
 def watch(process_existing: bool):
-    """Start monitoring the input folder for new PNG files.
+    """Start monitoring the input folder for new files.
 
     This is the main operation mode. The wizard will continuously
-    watch for new PNG files and process them automatically.
+    watch for new files and process them automatically.
     """
     config = load_config()
     config.ensure_folders_exist()
@@ -136,20 +228,47 @@ def watch(process_existing: bool):
         click.echo("Processing existing files...")
         watcher.process_existing()
 
-    click.echo("Watching for new PNG files... (Press Ctrl+C to stop)")
+    click.echo("Watching for new files... (Press Ctrl+C to stop)")
     watcher.start()
     watcher.run_forever()
 
 
 @cli.command()
 @click.argument("file_path", type=click.Path(exists=True, path_type=Path))
-def process(file_path: Path):
-    """Process a single PNG file manually.
+@click.option(
+    "--content-type",
+    type=click.Choice(["auto", "text", "graphic"]),
+    default="auto",
+    help="Content type for analysis",
+)
+@click.option(
+    "--thumbnail-size",
+    type=click.Choice(["small", "medium", "full"]),
+    default="medium",
+    help="Thumbnail size for graphic content",
+)
+@click.option(
+    "--pdf-mode",
+    type=click.Choice(["per_page", "whole_document"]),
+    default="per_page",
+    help="PDF processing mode",
+)
+def process(
+    file_path: Path,
+    content_type: str,
+    thumbnail_size: str,
+    pdf_mode: str,
+):
+    """Process a single file manually.
 
-    FILE_PATH: Path to the PNG file to process
+    FILE_PATH: Path to the file to process (PNG, JPG, JPEG, or PDF)
     """
-    if not file_path.suffix.lower() == ".png":
-        click.echo("Error: File must be a PNG image.", err=True)
+    if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+        click.echo(
+            f"Error: Unsupported file type '{file_path.suffix}'. "
+            f"Supported: {', '.join(sorted(SUPPORTED_EXTENSIONS))}",
+            err=True,
+        )
         sys.exit(1)
 
     config = load_config()
@@ -157,8 +276,14 @@ def process(file_path: Path):
 
     wizard = ScreenshotWizard(config)
 
+    options = ProcessingOptions(
+        content_type_override=None if content_type == "auto" else content_type,
+        thumbnail_size=thumbnail_size,
+        pdf_mode=pdf_mode,
+    )
+
     click.echo(f"Processing: {file_path}")
-    success = wizard.process_file(file_path)
+    success = wizard.process_file(file_path, options)
 
     if success:
         click.echo("Processing complete!")
@@ -169,7 +294,7 @@ def process(file_path: Path):
 
 @cli.command()
 def batch():
-    """Process all pending PNG files in the input folder."""
+    """Process all pending files in the input folder."""
     config = load_config()
     config.ensure_folders_exist()
 
@@ -178,7 +303,7 @@ def batch():
     pending_files = wizard.file_manager.list_pending_files(config.input_folder)
 
     if not pending_files:
-        click.echo("No PNG files found in input folder.")
+        click.echo("No supported files found in input folder.")
         return
 
     click.echo(f"Found {len(pending_files)} file(s) to process.")
@@ -233,6 +358,21 @@ def init():
     click.echo("")
     click.echo("Initialization complete!")
     click.echo("Run 'screenshot-wizard watch' to start monitoring.")
+
+
+@cli.command()
+def gui():
+    """Launch the Screenshot Wizard GUI."""
+    from .gui import ScreenshotWizardGUI
+
+    try:
+        config = load_config()
+    except SystemExit:
+        click.echo("Warning: Config load failed. GUI will start with defaults.", err=True)
+        return
+
+    app = ScreenshotWizardGUI(config)
+    app.run()
 
 
 def main():

@@ -109,6 +109,7 @@ class TestScreenshotAnalyzer:
             assert result.text == "Test content"
             assert result.categories == ["Screenshot", "Test"]
             assert result.source_file == sample_png.name
+            assert result.content_type == "text"
 
     def test_analyze_handles_empty_response(self, sample_png):
         """Test handling of empty API response."""
@@ -128,3 +129,124 @@ class TestScreenshotAnalyzer:
 
             # Should return something reasonable even with empty response
             assert result.source_file == sample_png.name
+
+    def test_analyze_graphic_mode(self, sample_png):
+        """Test analysis with graphic content type override."""
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = (
+            '{"description": "A beautiful sunset", "categories": ["Photo", "Nature"]}'
+        )
+
+        with patch("src.analyzer.OpenAI") as mock_openai:
+            mock_client = MagicMock()
+            mock_openai.return_value = mock_client
+            mock_client.chat.completions.create.return_value = mock_response
+
+            from src.analyzer import ScreenshotAnalyzer
+
+            analyzer = ScreenshotAnalyzer(api_key="test-key")
+            result = analyzer.analyze(
+                sample_png, max_categories=2, content_type_override="graphic"
+            )
+
+            assert result.content_type == "graphic"
+            assert result.description == "A beautiful sunset"
+            assert result.categories == ["Photo", "Nature"]
+            assert result.source_image_path == sample_png
+
+    def test_analyze_auto_detect(self, sample_png):
+        """Test auto-detect content type analysis."""
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = (
+            '{"content_type": "graphic", "text": "", '
+            '"description": "A chart showing data", "categories": ["Chart"]}'
+        )
+
+        with patch("src.analyzer.OpenAI") as mock_openai:
+            mock_client = MagicMock()
+            mock_openai.return_value = mock_client
+            mock_client.chat.completions.create.return_value = mock_response
+
+            from src.analyzer import ScreenshotAnalyzer
+
+            analyzer = ScreenshotAnalyzer(api_key="test-key")
+            result = analyzer.analyze(sample_png, max_categories=2)
+
+            assert result.content_type == "graphic"
+            assert result.description == "A chart showing data"
+
+    def test_parse_auto_response_valid(self, analyzer):
+        """Test parsing auto-detect JSON response."""
+        content = (
+            '{"content_type": "text", "text": "Hello", '
+            '"description": "", "categories": ["Test"]}'
+        )
+        ct, text, desc, cats = analyzer._parse_auto_response(content, 2)
+
+        assert ct == "text"
+        assert text == "Hello"
+        assert desc == ""
+        assert cats == ["Test"]
+
+    def test_parse_auto_response_invalid(self, analyzer):
+        """Test fallback for invalid auto-detect response."""
+        content = "not json"
+        ct, text, desc, cats = analyzer._parse_auto_response(content, 2)
+
+        assert ct == "text"
+        assert text == content
+        assert cats == ["Uncategorized"]
+
+    def test_parse_graphic_response(self, analyzer):
+        """Test parsing graphic analysis response."""
+        content = '{"description": "A diagram", "categories": ["Diagram"]}'
+        desc, cats = analyzer._parse_graphic_response(content, 2)
+
+        assert desc == "A diagram"
+        assert cats == ["Diagram"]
+
+    def test_analysis_result_backward_compat(self):
+        """Test that AnalysisResult works with just the original fields."""
+        from src.analyzer import AnalysisResult
+
+        result = AnalysisResult(
+            text="Hello",
+            categories=["Test"],
+            source_file="test.png",
+        )
+
+        assert result.content_type == "text"
+        assert result.description == ""
+        assert result.source_image_path is None
+
+    def test_analyze_uses_correct_mime_type(self, sample_png):
+        """Test that MIME type is determined from file extension."""
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = (
+            '{"text": "test", "categories": ["Test"]}'
+        )
+
+        with patch("src.analyzer.OpenAI") as mock_openai:
+            mock_client = MagicMock()
+            mock_openai.return_value = mock_client
+            mock_client.chat.completions.create.return_value = mock_response
+
+            from src.analyzer import ScreenshotAnalyzer
+
+            analyzer = ScreenshotAnalyzer(api_key="test-key")
+
+            # Test with explicit mime type
+            result = analyzer.analyze(
+                sample_png,
+                max_categories=2,
+                content_type_override="text",
+                image_mime_type="image/jpeg",
+            )
+
+            # Verify the API was called with the correct mime type
+            call_args = mock_client.chat.completions.create.call_args
+            image_url = call_args[1]["messages"][0]["content"][1]["image_url"]["url"]
+            assert image_url.startswith("data:image/jpeg;base64,")

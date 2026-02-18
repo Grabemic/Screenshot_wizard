@@ -5,6 +5,8 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+from .config import SUPPORTED_EXTENSIONS
+
 logger = logging.getLogger(__name__)
 
 
@@ -78,19 +80,19 @@ class FileManager:
         return archive_path
 
     def list_pending_files(self, input_folder: Path) -> list[Path]:
-        """List all PNG files in the input folder.
+        """List all supported files in the input folder.
 
         Args:
-            input_folder: Path to scan for PNG files
+            input_folder: Path to scan for supported files
 
         Returns:
-            List of PNG file paths
+            List of supported file paths sorted by modification time
         """
-        png_files = [
+        files = [
             f for f in input_folder.iterdir()
-            if f.is_file() and f.suffix.lower() == ".png"
+            if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS
         ]
-        return sorted(png_files, key=lambda p: p.stat().st_mtime)
+        return sorted(files, key=lambda p: p.stat().st_mtime)
 
     def cleanup_empty_input(self, input_folder: Path) -> None:
         """Remove empty subdirectories from input folder.

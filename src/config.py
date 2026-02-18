@@ -7,6 +7,8 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
+SUPPORTED_EXTENSIONS = frozenset({".png", ".jpg", ".jpeg", ".pdf"})
+
 
 class Config:
     """Configuration manager that loads settings from YAML and environment variables."""
@@ -27,6 +29,7 @@ class Config:
         if config_path is None:
             config_path = self.project_root / "config" / "settings.yaml"
 
+        self._config_path = config_path
         self._settings = self._load_yaml(config_path)
 
         # Validate API key exists
@@ -129,6 +132,20 @@ class Config:
         """Create all required folders if they don't exist."""
         for folder in [self.input_folder, self.output_folder, self.archive_folder]:
             folder.mkdir(parents=True, exist_ok=True)
+
+    def save_folder_settings(self, input_folder: str, output_folder: str) -> None:
+        """Write updated folder paths back to settings.yaml.
+
+        Args:
+            input_folder: New input folder path
+            output_folder: New output folder path
+        """
+        self._settings["folders"]["input"] = input_folder
+        self._settings["folders"]["output"] = output_folder
+
+        self._config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(self._config_path, "w", encoding="utf-8") as f:
+            yaml.dump(self._settings, f, default_flow_style=False)
 
     def display(self) -> str:
         """Return a formatted string of current configuration (without sensitive data)."""

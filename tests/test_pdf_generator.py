@@ -34,6 +34,30 @@ class TestPDFGenerator:
             source_file="test_screenshot.png",
         )
 
+    @pytest.fixture
+    def sample_png(self):
+        """Create a minimal valid PNG file for testing."""
+        png_data = bytes(
+            [
+                0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+                0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+                0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+                0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+                0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41,
+                0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+                0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+                0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+                0x42, 0x60, 0x82,
+            ]
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            f.write(png_data)
+            path = Path(f.name)
+
+        yield path
+        path.unlink(missing_ok=True)
+
     def test_escape_text_ampersand(self, generator):
         """Test escaping ampersand characters."""
         text = "Tom & Jerry"
@@ -142,3 +166,85 @@ class TestPDFGenerator:
         # Letter size is 612x792 points
         assert generator.page_size[0] == 612
         assert generator.page_size[1] == 792
+
+    def test_generate_graphic_content(self, generator, sample_png):
+        """Test generating PDF with graphic content type."""
+        from src.analyzer import AnalysisResult
+
+        result = AnalysisResult(
+            text="",
+            categories=["Photo", "Nature"],
+            source_file="sunset.png",
+            content_type="graphic",
+            description="A beautiful sunset over the ocean.",
+            source_image_path=sample_png,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "graphic_output.pdf"
+            result_path = generator.generate(
+                result, output_path, thumbnail_size="medium"
+            )
+
+            assert result_path.exists()
+            assert output_path.stat().st_size > 0
+
+    def test_generate_graphic_small_thumbnail(self, generator, sample_png):
+        """Test generating PDF with small thumbnail size."""
+        from src.analyzer import AnalysisResult
+
+        result = AnalysisResult(
+            text="",
+            categories=["Diagram"],
+            source_file="diagram.png",
+            content_type="graphic",
+            description="A system architecture diagram.",
+            source_image_path=sample_png,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "small_thumb.pdf"
+            result_path = generator.generate(
+                result, output_path, thumbnail_size="small"
+            )
+
+            assert result_path.exists()
+
+    def test_generate_graphic_full_thumbnail(self, generator, sample_png):
+        """Test generating PDF with full-width thumbnail."""
+        from src.analyzer import AnalysisResult
+
+        result = AnalysisResult(
+            text="",
+            categories=["Screenshot"],
+            source_file="fullscreen.png",
+            content_type="graphic",
+            description="Full screen capture.",
+            source_image_path=sample_png,
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "full_thumb.pdf"
+            result_path = generator.generate(
+                result, output_path, thumbnail_size="full"
+            )
+
+            assert result_path.exists()
+
+    def test_generate_graphic_no_source_image(self, generator):
+        """Test graphic content without source image path."""
+        from src.analyzer import AnalysisResult
+
+        result = AnalysisResult(
+            text="",
+            categories=["Photo"],
+            source_file="missing.png",
+            content_type="graphic",
+            description="A description without an image.",
+        )
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_path = Path(tmpdir) / "no_image.pdf"
+            result_path = generator.generate(result, output_path)
+
+            assert result_path.exists()

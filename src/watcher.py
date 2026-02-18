@@ -8,17 +8,19 @@ from typing import Callable
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
+from .config import SUPPORTED_EXTENSIONS
+
 logger = logging.getLogger(__name__)
 
 
-class PNGHandler(FileSystemEventHandler):
-    """Handles file system events for PNG files."""
+class FileHandler(FileSystemEventHandler):
+    """Handles file system events for supported file types."""
 
     def __init__(self, callback: Callable[[Path], None], debounce_seconds: float = 1.0):
         """Initialize the handler.
 
         Args:
-            callback: Function to call when a PNG file is detected
+            callback: Function to call when a supported file is detected
             debounce_seconds: Minimum time between processing the same file
         """
         super().__init__()
@@ -28,7 +30,7 @@ class PNGHandler(FileSystemEventHandler):
 
     def _should_process(self, file_path: Path) -> bool:
         """Check if a file should be processed (debouncing)."""
-        if not file_path.suffix.lower() == ".png":
+        if file_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
             return False
 
         current_time = time.time()
@@ -47,7 +49,7 @@ class PNGHandler(FileSystemEventHandler):
 
         file_path = Path(event.src_path)
         if self._should_process(file_path):
-            logger.info(f"New PNG detected: {file_path.name}")
+            logger.info(f"New file detected: {file_path.name}")
             # Small delay to ensure file is fully written
             time.sleep(0.5)
             self.callback(file_path)
@@ -59,13 +61,17 @@ class PNGHandler(FileSystemEventHandler):
 
         file_path = Path(event.dest_path)
         if self._should_process(file_path):
-            logger.info(f"PNG moved to folder: {file_path.name}")
+            logger.info(f"File moved to folder: {file_path.name}")
             time.sleep(0.5)
             self.callback(file_path)
 
 
+# Backward-compatible alias
+PNGHandler = FileHandler
+
+
 class FolderWatcher:
-    """Monitors a folder for new PNG files."""
+    """Monitors a folder for new supported files."""
 
     def __init__(
         self,
@@ -77,7 +83,7 @@ class FolderWatcher:
 
         Args:
             input_folder: Path to monitor for new files
-            callback: Function to call when a new PNG is detected
+            callback: Function to call when a new file is detected
             polling_interval: Seconds between checks (for fallback polling)
         """
         self.input_folder = input_folder
@@ -95,7 +101,7 @@ class FolderWatcher:
 
         # Set up watchdog observer
         self.observer = Observer()
-        handler = PNGHandler(self.callback)
+        handler = FileHandler(self.callback)
 
         self.observer.schedule(handler, str(self.input_folder), recursive=False)
         self.observer.start()
@@ -121,24 +127,41 @@ class FolderWatcher:
             self.observer.join()
             logger.info("Folder watcher stopped.")
 
+    def set_input_folder(self, new_folder: Path) -> None:
+        """Hot-swap the watched directory.
+
+        Stops the current observer (if running) and starts watching the new folder.
+
+        Args:
+            new_folder: New folder path to monitor
+        """
+        was_running = self._running
+        if was_running:
+            self.stop()
+
+        self.input_folder = new_folder
+
+        if was_running:
+            self.start()
+
     def process_existing(self) -> int:
-        """Process any existing PNG files in the input folder.
+        """Process any existing supported files in the input folder.
 
         Returns:
             Number of files processed
         """
-        png_files = [
+        supported_files = [
             f for f in self.input_folder.iterdir()
-            if f.is_file() and f.suffix.lower() == ".png"
+            if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS
         ]
 
-        if not png_files:
-            logger.info("No existing PNG files found in input folder.")
+        if not supported_files:
+            logger.info("No existing supported files found in input folder.")
             return 0
 
-        logger.info(f"Found {len(png_files)} existing PNG file(s) to process.")
+        logger.info(f"Found {len(supported_files)} existing file(s) to process.")
 
-        for file_path in png_files:
+        for file_path in supported_files:
             self.callback(file_path)
 
-        return len(png_files)
+        return len(supported_files)

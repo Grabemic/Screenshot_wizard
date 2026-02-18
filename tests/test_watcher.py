@@ -8,33 +8,56 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
-class TestPNGHandler:
-    """Test suite for PNGHandler class."""
+class TestFileHandler:
+    """Test suite for FileHandler class."""
 
     def test_should_process_png_file(self):
         """Test that PNG files are accepted."""
-        from src.watcher import PNGHandler
+        from src.watcher import FileHandler
 
-        handler = PNGHandler(callback=MagicMock())
+        handler = FileHandler(callback=MagicMock())
 
         assert handler._should_process(Path("test.png"))
         assert handler._should_process(Path("test.PNG"))
 
-    def test_should_not_process_non_png(self):
-        """Test that non-PNG files are rejected."""
-        from src.watcher import PNGHandler
+    def test_should_process_jpg_file(self):
+        """Test that JPG files are accepted."""
+        from src.watcher import FileHandler
 
-        handler = PNGHandler(callback=MagicMock())
+        handler = FileHandler(callback=MagicMock())
 
-        assert not handler._should_process(Path("test.jpg"))
-        assert not handler._should_process(Path("test.pdf"))
+        assert handler._should_process(Path("test.jpg"))
+        assert handler._should_process(Path("test.jpeg"))
+
+    def test_should_process_pdf_file(self):
+        """Test that PDF files are accepted."""
+        from src.watcher import FileHandler
+
+        handler = FileHandler(callback=MagicMock())
+
+        assert handler._should_process(Path("test.pdf"))
+
+    def test_should_not_process_unsupported(self):
+        """Test that unsupported files are rejected."""
+        from src.watcher import FileHandler
+
+        handler = FileHandler(callback=MagicMock())
+
         assert not handler._should_process(Path("test.txt"))
+        assert not handler._should_process(Path("test.doc"))
+        assert not handler._should_process(Path("test.bmp"))
+
+    def test_png_handler_alias(self):
+        """Test that PNGHandler is still available as alias."""
+        from src.watcher import FileHandler, PNGHandler
+
+        assert PNGHandler is FileHandler
 
     def test_debounce_same_file(self):
         """Test that same file is debounced."""
-        from src.watcher import PNGHandler
+        from src.watcher import FileHandler
 
-        handler = PNGHandler(callback=MagicMock(), debounce_seconds=1.0)
+        handler = FileHandler(callback=MagicMock(), debounce_seconds=1.0)
 
         # First call should be processed
         assert handler._should_process(Path("test.png"))
@@ -44,19 +67,19 @@ class TestPNGHandler:
 
     def test_debounce_different_files(self):
         """Test that different files are not debounced."""
-        from src.watcher import PNGHandler
+        from src.watcher import FileHandler
 
-        handler = PNGHandler(callback=MagicMock(), debounce_seconds=1.0)
+        handler = FileHandler(callback=MagicMock(), debounce_seconds=1.0)
 
         assert handler._should_process(Path("test1.png"))
         assert handler._should_process(Path("test2.png"))
 
     def test_on_created_triggers_callback(self):
-        """Test that on_created triggers callback for PNG files."""
-        from src.watcher import PNGHandler
+        """Test that on_created triggers callback for supported files."""
+        from src.watcher import FileHandler
 
         callback = MagicMock()
-        handler = PNGHandler(callback=callback, debounce_seconds=0)
+        handler = FileHandler(callback=callback, debounce_seconds=0)
 
         # Create mock event
         event = MagicMock()
@@ -68,12 +91,28 @@ class TestPNGHandler:
 
         callback.assert_called_once()
 
-    def test_on_created_ignores_directories(self):
-        """Test that directories are ignored."""
-        from src.watcher import PNGHandler
+    def test_on_created_triggers_for_jpg(self):
+        """Test that on_created triggers callback for JPG files."""
+        from src.watcher import FileHandler
 
         callback = MagicMock()
-        handler = PNGHandler(callback=callback)
+        handler = FileHandler(callback=callback, debounce_seconds=0)
+
+        event = MagicMock()
+        event.is_directory = False
+        event.src_path = "/some/path/photo.jpg"
+
+        with patch("src.watcher.time.sleep"):
+            handler.on_created(event)
+
+        callback.assert_called_once()
+
+    def test_on_created_ignores_directories(self):
+        """Test that directories are ignored."""
+        from src.watcher import FileHandler
+
+        callback = MagicMock()
+        handler = FileHandler(callback=callback)
 
         event = MagicMock()
         event.is_directory = True
@@ -84,11 +123,11 @@ class TestPNGHandler:
         callback.assert_not_called()
 
     def test_on_moved_triggers_callback(self):
-        """Test that on_moved triggers callback for PNG files."""
-        from src.watcher import PNGHandler
+        """Test that on_moved triggers callback for supported files."""
+        from src.watcher import FileHandler
 
         callback = MagicMock()
-        handler = PNGHandler(callback=callback, debounce_seconds=0)
+        handler = FileHandler(callback=callback, debounce_seconds=0)
 
         event = MagicMock()
         event.is_directory = False
@@ -160,6 +199,26 @@ class TestFolderWatcher:
         assert count == 2
         assert callback.call_count == 2
 
+    def test_process_existing_multi_format(self, temp_input_dir):
+        """Test process_existing with multiple file formats."""
+        (temp_input_dir / "test1.png").touch()
+        (temp_input_dir / "test2.jpg").touch()
+        (temp_input_dir / "test3.pdf").touch()
+        (temp_input_dir / "test4.txt").touch()  # Should be ignored
+
+        from src.watcher import FolderWatcher
+
+        callback = MagicMock()
+        watcher = FolderWatcher(
+            input_folder=temp_input_dir,
+            callback=callback,
+        )
+
+        count = watcher.process_existing()
+
+        assert count == 3
+        assert callback.call_count == 3
+
     def test_start_and_stop(self, temp_input_dir):
         """Test starting and stopping the watcher."""
         from src.watcher import FolderWatcher
@@ -174,3 +233,43 @@ class TestFolderWatcher:
 
         watcher.stop()
         assert not watcher._running
+
+    def test_set_input_folder(self, temp_input_dir):
+        """Test hot-swapping the watched directory."""
+        from src.watcher import FolderWatcher
+
+        with tempfile.TemporaryDirectory() as new_dir:
+            new_folder = Path(new_dir)
+
+            watcher = FolderWatcher(
+                input_folder=temp_input_dir,
+                callback=MagicMock(),
+            )
+
+            assert watcher.input_folder == temp_input_dir
+
+            watcher.set_input_folder(new_folder)
+
+            assert watcher.input_folder == new_folder
+
+    def test_set_input_folder_restarts_if_running(self, temp_input_dir):
+        """Test that set_input_folder restarts watcher if it was running."""
+        from src.watcher import FolderWatcher
+
+        with tempfile.TemporaryDirectory() as new_dir:
+            new_folder = Path(new_dir)
+
+            watcher = FolderWatcher(
+                input_folder=temp_input_dir,
+                callback=MagicMock(),
+            )
+
+            watcher.start()
+            assert watcher._running
+
+            watcher.set_input_folder(new_folder)
+
+            assert watcher._running
+            assert watcher.input_folder == new_folder
+
+            watcher.stop()

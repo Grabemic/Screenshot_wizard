@@ -116,6 +116,21 @@ class TestFileManager:
         assert len(pending) == 2
         assert all(p.suffix.lower() == ".png" for p in pending)
 
+    def test_list_pending_files_multi_format(self, file_manager, temp_dirs):
+        """Test listing files of all supported formats."""
+        (temp_dirs["input"] / "test1.png").touch()
+        (temp_dirs["input"] / "test2.jpg").touch()
+        (temp_dirs["input"] / "test3.jpeg").touch()
+        (temp_dirs["input"] / "test4.pdf").touch()
+        (temp_dirs["input"] / "test5.txt").touch()  # Should be ignored
+        (temp_dirs["input"] / "test6.bmp").touch()  # Should be ignored
+
+        pending = file_manager.list_pending_files(temp_dirs["input"])
+
+        assert len(pending) == 4
+        extensions = {p.suffix.lower() for p in pending}
+        assert extensions == {".png", ".jpg", ".jpeg", ".pdf"}
+
     def test_list_pending_files_sorted_by_mtime(self, file_manager, temp_dirs):
         """Test that files are sorted by modification time."""
         import time
